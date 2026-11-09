@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,6 +20,8 @@ type Config struct {
 	AppCacheTTL      time.Duration
 	LoginMaxAttempts int64
 	LoginWindow      time.Duration
+	KafkaBrokers     []string
+	OutboxInterval   time.Duration
 }
 
 func Load() (Config, error) {
@@ -55,6 +58,14 @@ func Load() (Config, error) {
 	if err != nil {
 		errs = append(errs, fmt.Errorf("LOGIN_WINDOW: %w", err))
 	}
+	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
+	if kafkaBrokers == "" {
+		errs = append(errs, errors.New("missing KAFKA_BROKERS environment variable"))
+	}
+	outboxInterval, err := time.ParseDuration(getEnv("OUTBOX_INTERVAL", "1s"))
+	if err != nil {
+		errs = append(errs, fmt.Errorf("OUTBOX_INTERVAL: %w", err))
+	}
 	if err := errors.Join(errs...); err != nil {
 		return Config{}, err
 	}
@@ -69,6 +80,8 @@ func Load() (Config, error) {
 		AppCacheTTL:      appCacheTTL,
 		LoginMaxAttempts: loginMaxAttempts,
 		LoginWindow:      loginWindow,
+		KafkaBrokers:     strings.Split(kafkaBrokers, ","),
+		OutboxInterval:   outboxInterval,
 	}, nil
 }
 

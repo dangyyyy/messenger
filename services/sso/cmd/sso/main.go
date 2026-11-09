@@ -9,11 +9,14 @@ import (
 	"messenger/services/sso/internal/cache"
 	"messenger/services/sso/internal/config"
 	"messenger/services/sso/internal/grpcapi"
+	"messenger/services/sso/internal/kafka"
+	"messenger/services/sso/internal/outbox"
 	"messenger/services/sso/internal/service/auth"
 	"messenger/services/sso/internal/storage/postgres"
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,7 +24,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const startupTimeout = 30 * time.Second
+const (
+	startupTimeout  = 30 * time.Second
+	outboxBatchSize = 100
+)
 
 func main() {
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -70,6 +76,19 @@ func run(cfg *config.Config) error {
 
 	apps := cache.NewApps(storage, rdb, cfg.AppCacheTTL)
 	limiter := cache.NewLoginLimiter(rdb, cfg.LoginMaxAttempts, cfg.LoginWindow)
+
+	producer, err := kafka.NewProducer(cfg.KafkaBrokers)
+	if err != nil {
+		return err
+	}
+	defer producer.Close()
+
+	relay := outbox.NewRelay(storage, producer, cfg.OutboxInterval, outboxBatchSize)
+	relayCtx, cancelRelay := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer cancelRelay()
+	wg.Go(func() { relay.Run(relayCtx) })
 
 	authService, err := auth.New(storage, apps, limiter, cfg.TokenTTL)
 	if err != nil {
