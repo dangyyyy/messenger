@@ -5,8 +5,9 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/sso ./cmd/sso
+COPY gen ./gen
+COPY services/sso ./services/sso
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/sso ./services/sso/cmd/sso
 
 FROM gcr.io/distroless/static-debian12:nonroot
 

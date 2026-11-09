@@ -17,17 +17,25 @@ import (
 	gojwt "github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
+	"github.com/testcontainers/testcontainers-go/modules/kafka"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
+	eventsv1 "messenger/gen/events/v1"
 	ssov1 "messenger/gen/sso/v1"
 	"messenger/services/sso/internal/cache"
+	"messenger/services/sso/internal/events"
 	"messenger/services/sso/internal/grpcapi"
 	"messenger/services/sso/internal/jwt"
+	ssokafka "messenger/services/sso/internal/kafka"
+	"messenger/services/sso/internal/outbox"
 	"messenger/services/sso/internal/service/auth"
 	pgstorage "messenger/services/sso/internal/storage/postgres"
 )
@@ -44,8 +52,9 @@ const (
 )
 
 var (
-	client ssov1.AuthServiceClient
-	rdb    *redis.Client
+	client       ssov1.AuthServiceClient
+	rdb          *redis.Client
+	kafkaBrokers []string
 )
 
 func TestMain(m *testing.M) {
@@ -114,6 +123,33 @@ func runTests(m *testing.M) int {
 	apps := cache.NewApps(storage, rdb, appCacheTTL)
 	limiter := cache.NewLoginLimiter(rdb, loginMaxAttempts, loginWindow)
 
+	kafkaContainer, err := kafka.Run(ctx, "confluentinc/confluent-local:8.1.0")
+	if err != nil {
+		log.Printf("start kafka: %v", err)
+		return 1
+	}
+	defer func() { _ = kafkaContainer.Terminate(ctx) }()
+
+	kafkaBrokers, err = kafkaContainer.Brokers(ctx)
+	if err != nil {
+		log.Printf("kafka brokers: %v", err)
+		return 1
+	}
+	if err := createTopic(ctx, kafkaBrokers, events.TopicUserRegistered); err != nil {
+		log.Printf("create topic: %v", err)
+		return 1
+	}
+
+	producer, err := ssokafka.NewProducer(kafkaBrokers)
+	if err != nil {
+		log.Printf("create producer: %v", err)
+		return 1
+	}
+	defer producer.Close()
+
+	relayCtx, cancelRelay := context.WithCancel(ctx)
+	defer cancelRelay()
+	go outbox.NewRelay(storage, producer, 100*time.Millisecond, 100).Run(relayCtx)
 	service, err := auth.New(storage, apps, limiter, tokenTTL)
 	if err != nil {
 		log.Printf("create service: %v", err)
@@ -151,7 +187,19 @@ func seedApp(ctx context.Context, databaseURL string) error {
 	_, err = conn.Exec(ctx, `INSERT INTO apps (id, name, secret) VALUES ($1, $2, $3)`, appID, "test-app", appSecret)
 	return err
 }
+func createTopic(ctx context.Context, brokers []string, topic string) error {
+	adminClient, err := kgo.NewClient(kgo.SeedBrokers(brokers...))
+	if err != nil {
+		return err
+	}
+	defer adminClient.Close()
 
+	resp, err := kadm.NewClient(adminClient).CreateTopic(ctx, 3, 1, nil, topic)
+	if err != nil {
+		return err
+	}
+	return resp.Err
+}
 func uniqueEmail() string {
 	return fmt.Sprintf("%s@example.com", strings.ToLower(rand.Text()))
 }
@@ -353,5 +401,51 @@ func TestLogin_CachesApp(t *testing.T) {
 	}
 	if ttl <= 0 || ttl > appCacheTTL {
 		t.Fatalf("cache ttl = %s, want within %s", ttl, appCacheTTL)
+	}
+}
+func TestRegister_PublishesEvent(t *testing.T) {
+	ctx := testContext(t)
+	email := uniqueEmail()
+
+	registered, err := client.Register(ctx, &ssov1.RegisterRequest{Email: email, Password: password})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	reader, err := kgo.NewClient(
+		kgo.SeedBrokers(kafkaBrokers...),
+		kgo.ConsumeTopics(events.TopicUserRegistered),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	if err != nil {
+		t.Fatalf("create reader: %v", err)
+	}
+	defer reader.Close()
+
+	for {
+		fetches := reader.PollFetches(ctx)
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("event for user %d not published: %v", registered.GetUserId(), err)
+		}
+		for iter := fetches.RecordIter(); !iter.Done(); {
+			record := iter.Next()
+			var event eventsv1.UserRegistered
+			if err := proto.Unmarshal(record.Value, &event); err != nil {
+				t.Fatalf("unmarshal event: %v", err)
+			}
+			if event.GetUserId() != registered.GetUserId() {
+				continue
+			}
+			if event.GetEmail() != email {
+				t.Errorf("email = %q, want %q", event.GetEmail(), email)
+			}
+			if string(record.Key) != strconv.FormatInt(registered.GetUserId(), 10) {
+				t.Errorf("key = %q, want user id", record.Key)
+			}
+			if event.GetEventId() == "" {
+				t.Error("event id is empty")
+			}
+			return
+		}
 	}
 }

@@ -1,8 +1,7 @@
 .git
 .github
-.env
-*.out
-*.test
-Dockerfile
+.idea
+**/.env
+**/tests
+**/Dockerfile
 docker-compose.yml
-tests
