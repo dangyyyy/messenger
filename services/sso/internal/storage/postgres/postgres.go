@@ -5,8 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"messenger/services/sso/internal/domain"
-	"messenger/services/sso/migrations"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -14,6 +13,10 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
+
+	"messenger/services/sso/internal/domain"
+	"messenger/services/sso/internal/events"
+	"messenger/services/sso/migrations"
 )
 
 const uniqueViolation = "23505"
@@ -38,8 +41,14 @@ func (s *Storage) Close() {
 	s.pool.Close()
 }
 func (s *Storage) CreateUser(ctx context.Context, email string, passHash []byte) (int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	var id int64
-	err := s.pool.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`INSERT INTO users (email, pass_hash) VALUES ($1, $2) RETURNING id`,
 		email, string(passHash),
 	).Scan(&id)
@@ -49,6 +58,22 @@ func (s *Storage) CreateUser(ctx context.Context, email string, passHash []byte)
 			return 0, domain.ErrUserExists
 		}
 		return 0, fmt.Errorf("create user: %w", err)
+	}
+
+	event, err := events.UserRegistered(id, email, time.Now())
+	if err != nil {
+		return 0, fmt.Errorf("build event: %w", err)
+	}
+	_, err = tx.Exec(ctx,
+		`INSERT INTO outbox (topic, key, payload) VALUES ($1, $2, $3)`,
+		event.Topic, event.Key, event.Payload,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert outbox: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit tx: %w", err)
 	}
 	return id, nil
 }
@@ -94,6 +119,49 @@ func (s *Storage) AppByID(ctx context.Context, id int32) (domain.App, error) {
 		return domain.App{}, fmt.Errorf("select app: %w", err)
 	}
 	return app, nil
+}
+func (s *Storage) ProcessOutbox(ctx context.Context, limit int, publish func(context.Context, []domain.OutboxMessage) error) (int, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx,
+		`SELECT id, topic, key, payload FROM outbox
+		 WHERE sent_at IS NULL
+		 ORDER BY id
+		 LIMIT $1
+		 FOR UPDATE SKIP LOCKED`,
+		limit,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("select outbox: %w", err)
+	}
+	messages, err := pgx.CollectRows(rows, pgx.RowToStructByPos[domain.OutboxMessage])
+	if err != nil {
+		return 0, fmt.Errorf("scan outbox: %w", err)
+	}
+	if len(messages) == 0 {
+		return 0, nil
+	}
+
+	if err := publish(ctx, messages); err != nil {
+		return 0, fmt.Errorf("publish: %w", err)
+	}
+
+	ids := make([]int64, len(messages))
+	for i, m := range messages {
+		ids[i] = m.ID
+	}
+	if _, err := tx.Exec(ctx, `UPDATE outbox SET sent_at = NOW() WHERE id = ANY($1)`, ids); err != nil {
+		return 0, fmt.Errorf("mark outbox sent: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit tx: %w", err)
+	}
+	return len(messages), nil
 }
 
 func Migrate(ctx context.Context, databaseURL string) error {

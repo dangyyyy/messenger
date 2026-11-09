@@ -22,3 +22,9 @@ type App struct {
 	Name   string
 	Secret string
 }
+type OutboxMessage struct {
+	ID      int64
+	Topic   string
+	Key     string
+	Payload []byte
+}
