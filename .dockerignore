@@ -2,6 +2,7 @@
 .github
 .idea
 **/.env
-**/tests
-**/Dockerfile
-docker-compose.yml
+configs
+deployments
+test
+build
