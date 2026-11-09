@@ -1,0 +1,8 @@
+.git
+.github
+.env
+*.out
+*.test
+Dockerfile
+docker-compose.yml
+tests
