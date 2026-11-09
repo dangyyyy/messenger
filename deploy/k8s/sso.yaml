@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sso-config
+  namespace: messenger
+data:
+  GRPC_PORT: "50051"
+  GRPC_REFLECTION: "true"
+  LOG_LEVEL: info
+  REDIS_URL: redis://redis:6379/0
+  KAFKA_BROKERS: kafka:9092
+  TOKEN_TTL: 1h
+  SHUTDOWN_TIMEOUT: 10s
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sso
+  namespace: messenger
+spec:
+  selector:
+    app: sso
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sso
+  namespace: messenger
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sso
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: sso
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: sso
+          image: messenger/sso:0.1.0
+          ports:
+            - name: grpc
+              containerPort: 50051
+          envFrom:
+            - configMapRef:
+                name: sso-config
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sso-db
+                  key: password
+            - name: DATABASE_URL
+              value: postgres://sso:$(DB_PASSWORD)@sso-postgres:5432/sso?sslmode=disable
+          readinessProbe:
+            grpc:
+              port: 50051
+            periodSeconds: 5
+          livenessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
