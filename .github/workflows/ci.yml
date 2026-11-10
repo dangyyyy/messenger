@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [ sso, notifier ]
+        service: [ sso, notifier, chat, gateway ]
     permissions:
       contents: read
       packages: write
