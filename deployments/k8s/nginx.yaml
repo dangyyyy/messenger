@@ -35,6 +35,10 @@ spec:
             # resolver nginx не знает про search-домены, поэтому полное имя
             - name: SSO_HOST
               value: sso-headless.messenger.svc.cluster.local
+            - name: CHAT_HOST
+              value: chat.messenger.svc.cluster.local
+            - name: GATEWAY_HOST
+              value: gateway.messenger.svc.cluster.local
           ports:
             - name: https
               containerPort: 8443
@@ -44,6 +48,9 @@ spec:
               readOnly: true
             - name: certs
               mountPath: /etc/nginx/certs
+              readOnly: true
+            - name: web
+              mountPath: /usr/share/nginx/html
               readOnly: true
           readinessProbe:
             httpGet:
@@ -70,3 +77,6 @@ spec:
         - name: certs
           secret:
             secretName: nginx-tls
+        - name: web
+          configMap:
+            name: nginx-web

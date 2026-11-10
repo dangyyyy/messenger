@@ -78,6 +78,11 @@ spec:
                   key: password
             - name: DATABASE_URL
               value: postgres://sso:$(DB_PASSWORD)@sso-postgres:5432/sso?sslmode=disable
+            - name: APP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-jwt
+                  key: secret
           readinessProbe:
             grpc:
               port: 50051

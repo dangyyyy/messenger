@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chat-config
+  namespace: messenger
+data:
+  GRPC_PORT: "50052"
+  HTTP_PORT: "8081"
+  GRPC_REFLECTION: "true"
+  LOG_LEVEL: info
+  REDIS_URL: redis://redis:6379/0
+  KAFKA_BROKERS: kafka:9092
+  KAFKA_CONSUMER_GROUP: chat
+  APP_ID: "1"
+  SHUTDOWN_TIMEOUT: 10s
+---
+# Headless: и nginx, и gateway сами балансируют запросы по подам chat
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat
+  namespace: messenger
+spec:
+  clusterIP: None
+  selector:
+    app: chat
+  ports:
+    - name: grpc
+      port: 50052
+      targetPort: grpc
+    - name: http
+      port: 8081
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat
+  namespace: messenger
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: chat
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: chat
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: chat
+          image: messenger/chat:0.1.0
+          ports:
+            - name: grpc
+              containerPort: 50052
+            - name: http
+              containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: chat-config
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: chat-db
+                  key: password
+            - name: DATABASE_URL
+              value: postgres://chat:$(DB_PASSWORD)@chat-postgres:5432/chat?sslmode=disable
+            - name: APP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-jwt
+                  key: secret
+          readinessProbe:
+            grpc:
+              port: 50052
+            periodSeconds: 5
+          livenessProbe:
+            grpc:
+              port: 50052
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
