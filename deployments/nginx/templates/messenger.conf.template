@@ -1,8 +1,8 @@
-# Шаблон: при старте контейнера envsubst подставит ${SSO_HOST} и ${NGINX_LOCAL_RESOLVERS}
-# и положит готовый файл в /etc/nginx/conf.d/messenger.conf (внутрь блока http).
+# Шаблон: при старте контейнера envsubst подставит ${SSO_HOST}, ${CHAT_HOST}, ${GATEWAY_HOST}
+# и ${NGINX_LOCAL_RESOLVERS} и положит готовый файл в /etc/nginx/conf.d/messenger.conf (внутрь блока http).
 
 log_format grpc_json escape=json
-    '{"time":"$time_iso8601","client":"$remote_addr","method":"$request_uri",'
+    '{"time":"$time_iso8601","client":"$remote_addr","method":"$request_method","uri":"$request_uri",'
     '"http_status":$status,"grpc_status":"$sent_trailer_grpc_status",'
     '"upstream":"$upstream_addr","duration":$request_time}';
 
@@ -12,10 +12,33 @@ resolver ${NGINX_LOCAL_RESOLVERS} valid=5s ipv6=off;
 # Не больше 5 запросов в секунду с одного IP, общая память на все воркеры
 limit_req_zone $binary_remote_addr zone=per_ip:10m rate=5r/s;
 
+# Для WebSocket: если клиент просит Upgrade, передаем "Connection: upgrade", иначе закрываем
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
 upstream sso {
     zone sso 64k;
     # resolve: nginx сам перечитывает DNS и видит новые/умершие реплики
     server ${SSO_HOST}:50051 resolve;
+    keepalive 16;
+}
+
+upstream chat_grpc {
+    zone chat_grpc 64k;
+    server ${CHAT_HOST}:50052 resolve;
+    keepalive 16;
+}
+
+upstream chat_ws {
+    zone chat_ws 64k;
+    server ${CHAT_HOST}:8081 resolve;
+}
+
+upstream gateway {
+    zone gateway 64k;
+    server ${GATEWAY_HOST}:8080 resolve;
     keepalive 16;
 }
 
@@ -36,10 +59,49 @@ server {
         return 200 "ok\n";
     }
 
+    # --- Браузер: статика, REST и WebSocket ---
+
+    location / {
+        root /usr/share/nginx/html;
+        try_files $uri /index.html;
+    }
+
+    location /api/ {
+        limit_req zone=per_ip burst=20 nodelay;
+        limit_req_status 429;
+        proxy_pass http://gateway;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /ws {
+        proxy_pass http://chat_ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $http_host;
+        # Соединение живет долго; chat шлет ping каждые 30 секунд
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    # --- gRPC-клиенты: grpcurl, grpcui, другие сервисы ---
+
     location /sso.v1.AuthService/ {
         limit_req zone=per_ip burst=10 nodelay;
         limit_req_status 429;
+        error_page 429 = @grpc_rate_limited;
         grpc_pass grpc://sso;
+    }
+
+    location /chat.v1.ChatService/ {
+        limit_req zone=per_ip burst=10 nodelay;
+        limit_req_status 429;
+        error_page 429 = @grpc_rate_limited;
+        grpc_pass grpc://chat_grpc;
     }
 
     location /grpc.reflection. {
@@ -51,7 +113,6 @@ server {
     }
 
     # gRPC-клиент не понимает HTTP 429, поэтому отдаем ответ в формате gRPC
-    error_page 429 = @grpc_rate_limited;
     location @grpc_rate_limited {
         default_type application/grpc;
         add_header grpc-status 8 always;

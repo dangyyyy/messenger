@@ -31,6 +31,22 @@ services:
       timeout: 5s
       retries: 10
 
+  chat-postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: chat
+      POSTGRES_USER: chat
+      POSTGRES_PASSWORD: ${CHAT_DB_PASSWORD}
+    ports:
+      - "${CHAT_DB_PORT:-5435}:5432"
+    volumes:
+      - chat_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chat -d chat"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   redis:
     image: redis:8-alpine
     ports:
@@ -98,6 +114,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       GRPC_PORT: "50051"
       GRPC_REFLECTION: "true"
+      APP_SECRET: ${APP_SECRET}
     deploy:
       replicas: 2
     depends_on:
@@ -125,21 +142,61 @@ services:
     restart: unless-stopped
     stop_grace_period: 15s
 
+  chat:
+    build:
+      context: .
+      dockerfile: build/package/chat/Dockerfile
+    environment:
+      DATABASE_URL: postgres://chat:${CHAT_DB_PASSWORD}@chat-postgres:5432/chat?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BROKERS: kafka:9092
+      APP_SECRET: ${APP_SECRET}
+      GRPC_REFLECTION: "true"
+    deploy:
+      replicas: 2
+    depends_on:
+      chat-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 15s
+
+  gateway:
+    build:
+      context: .
+      dockerfile: build/package/gateway/Dockerfile
+    environment:
+      SSO_ADDR: sso:50051
+      CHAT_ADDR: chat:50052
+    depends_on:
+      - sso
+      - chat
+    restart: unless-stopped
+
   nginx:
     image: nginx:1.30-alpine
     environment:
       NGINX_ENTRYPOINT_LOCAL_RESOLVERS: "1"
       SSO_HOST: sso
+      CHAT_HOST: chat
+      GATEWAY_HOST: gateway
     ports:
       - "${NGINX_PORT:-8443}:8443"
     volumes:
       - ./deployments/nginx/templates:/etc/nginx/templates:ro
       - ./deployments/nginx/certs:/etc/nginx/certs:ro
+      - ./web:/usr/share/nginx/html:ro
     depends_on:
       - sso
+      - chat
+      - gateway
     restart: unless-stopped
 
 volumes:
   sso_postgres_data:
   notifier_postgres_data:
+  chat_postgres_data:
   kafka_data:

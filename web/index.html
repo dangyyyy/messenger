@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Messenger</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --text: #1d2129; --muted: #6b7280;
+    --border: #e3e5e8; --accent: #2f6fed; --accent-text: #ffffff;
+    --mine: #2f6fed; --mine-text: #ffffff; --theirs: #eef0f3; --error: #c62828;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111317; --panel: #1a1d23; --text: #e6e8eb; --muted: #9aa1ab;
+      --border: #2a2e36; --theirs: #262a32; --error: #ef6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  button, input { font: inherit; }
+  button { cursor: pointer; border: 0; border-radius: 8px; padding: 9px 14px; background: var(--accent); color: var(--accent-text); }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  button:disabled { opacity: .6; cursor: default; }
+  input { width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .hidden { display: none !important; }
+  .error { color: var(--error); font-size: 13px; min-height: 18px; }
+
+  #auth { max-width: 360px; margin: 12vh auto; padding: 28px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+  #auth h1 { margin: 0 0 4px; font-size: 22px; }
+  #auth p { margin: 0 0 20px; color: var(--muted); }
+  #auth form { display: grid; gap: 10px; }
+  #auth .row { display: flex; gap: 8px; }
+  #auth .row button { flex: 1; }
+
+  #app { display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
+  #sidebar { display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--panel); min-height: 0; }
+  #me { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  #me span { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  #status.online { background: #2e9e5b; }
+  #new-chat { display: flex; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  #new-chat-error { padding: 0 16px; }
+  #chats { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
+  #chats li { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  #chats li:hover { background: var(--theirs); }
+  #chats li.active { background: var(--theirs); box-shadow: inset 3px 0 var(--accent); }
+  #chats .peer { font-weight: 600; }
+  #chats .preview { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  #conversation { display: flex; flex-direction: column; min-height: 0; }
+  #conversation header { padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--panel); font-weight: 600; }
+  #messages { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 6px; }
+  #load-more { align-self: center; margin-bottom: 8px; }
+  .msg { max-width: 70%; padding: 8px 12px; border-radius: 12px; background: var(--theirs); align-self: flex-start; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.mine { background: var(--mine); color: var(--mine-text); align-self: flex-end; }
+  .msg time { display: block; font-size: 11px; opacity: .7; margin-top: 2px; text-align: right; }
+  #composer { display: flex; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); background: var(--panel); }
+  #empty { margin: auto; color: var(--muted); }
+
+  @media (max-width: 700px) {
+    #app { grid-template-columns: 1fr; }
+    #app.chat-open #sidebar { display: none; }
+    #app:not(.chat-open) #conversation { display: none; }
+    #back { display: inline-block !important; }
+  }
+  #back { display: none; margin-right: 8px; padding: 4px 10px; }
+</style>
+</head>
+<body>
+
+<section id="auth">
+  <h1>Messenger</h1>
+  <p>Войдите или создайте аккаунт</p>
+  <form id="auth-form">
+    <input id="email" type="email" placeholder="email" autocomplete="username" required>
+    <input id="password" type="password" placeholder="пароль, минимум 8 символов" autocomplete="current-password" required>
+    <div class="row">
+      <button type="submit" id="login-btn">Войти</button>
+      <button type="button" id="register-btn" class="ghost">Регистрация</button>
+    </div>
+    <div class="error" id="auth-error"></div>
+  </form>
+</section>
+
+<section id="app" class="hidden">
+  <aside id="sidebar">
+    <div id="me"><i id="status" title="realtime"></i><span id="me-email"></span><button class="ghost" id="logout">Выйти</button></div>
+    <form id="new-chat">
+      <input id="peer-email" type="email" placeholder="email собеседника" required>
+      <button type="submit">Чат</button>
+    </form>
+    <div class="error" id="new-chat-error"></div>
+    <ul id="chats"></ul>
+  </aside>
+  <main id="conversation">
+    <header><button class="ghost" id="back">←</button><span id="chat-title">Выберите чат</span></header>
+    <div id="messages"><div id="empty">Сообщений пока нет</div></div>
+    <form id="composer" class="hidden">
+      <input id="text" placeholder="Сообщение" autocomplete="off" maxlength="4000">
+      <button type="submit">Отправить</button>
+    </form>
+  </main>
+</section>
+
+<script>
+const APP_ID = 1;
+const PAGE = 50;
+const $ = (id) => document.getElementById(id);
+
+const state = {
+  token: localStorage.getItem("token"),
+  me: null,          // { id, email } из JWT
+  chats: [],
+  chatId: null,      // открытый чат (строка: int64 в JSON приходит строкой)
+  oldestId: null,
+  ws: null,
+  wsRetry: 0,
+};
+
+// ---------- API ----------
+
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      ...(state.token ? { Authorization: "Bearer " + state.token } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && state.token) {
+    logout();
+  }
+  if (!res.ok) {
+    throw new Error(data.message || "Ошибка " + res.status);
+  }
+  return data;
+}
+
+// Полезная нагрузка JWT — base64url JSON. Подпись проверяет сервер, нам нужны только id и email
+function parseToken(token) {
+  const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+  const claims = JSON.parse(decodeURIComponent(escape(atob(payload))));
+  return { id: claims.sub, email: claims.email, exp: claims.exp };
+}
+
+// ---------- Вход ----------
+
+$("auth-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  login();
+});
+
+$("register-btn").addEventListener("click", async () => {
+  if (!$("auth-form").reportValidity()) return;
+  await withButton($("register-btn"), $("auth-error"), async () => {
+    await api("POST", "/api/v1/auth/register", credentials());
+    await login();
+  });
+});
+
+function credentials() {
+  return { email: $("email").value.trim(), password: $("password").value };
+}
+
+async function login() {
+  await withButton($("login-btn"), $("auth-error"), async () => {
+    const data = await api("POST", "/api/v1/auth/login", { ...credentials(), appId: APP_ID });
+    state.token = data.token;
+    localStorage.setItem("token", data.token);
+    start();
+  });
+}
+
+function logout() {
+  localStorage.removeItem("token");
+  state.token = null;
+  if (state.ws) {
+    state.ws.onclose = null;
+    state.ws.close();
+  }
+  location.reload();
+}
+$("logout").addEventListener("click", logout);
+
+async function withButton(button, errorEl, fn) {
+  button.disabled = true;
+  errorEl.textContent = "";
+  try {
+    await fn();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+// ---------- Чаты ----------
+
+async function loadChats() {
+  const data = await api("GET", "/api/v1/chats");
+  state.chats = data.chats;
+  renderChats();
+}
+
+function renderChats() {
+  const list = $("chats");
+  list.replaceChildren();
+  for (const chat of state.chats) {
+    const li = document.createElement("li");
+    li.classList.toggle("active", chat.id === state.chatId);
+    const peer = document.createElement("div");
+    peer.className = "peer";
+    peer.textContent = chat.peerEmail;
+    const preview = document.createElement("div");
+    preview.className = "preview";
+    const last = chat.lastMessage;
+    preview.textContent = last ? (last.senderId === state.me.id ? "Вы: " : "") + last.text : "Нет сообщений";
+    li.append(peer, preview);
+    li.addEventListener("click", () => openChat(chat.id));
+    list.append(li);
+  }
+}
+
+$("new-chat").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const button = e.submitter;
+  await withButton(button, $("new-chat-error"), async () => {
+    const data = await api("POST", "/api/v1/chats", { peerEmail: $("peer-email").value.trim() });
+    $("peer-email").value = "";
+    await loadChats();
+    openChat(data.chat.id);
+  });
+});
+
+async function openChat(chatId) {
+  state.chatId = chatId;
+  state.oldestId = null;
+  const chat = state.chats.find((c) => c.id === chatId);
+  $("chat-title").textContent = chat ? chat.peerEmail : "";
+  $("app").classList.add("chat-open");
+  $("composer").classList.remove("hidden");
+  $("messages").replaceChildren();
+  renderChats();
+  await loadMessages();
+  $("text").focus();
+}
+
+$("back").addEventListener("click", () => $("app").classList.remove("chat-open"));
+
+// ---------- Сообщения ----------
+
+async function loadMessages() {
+  const chatId = state.chatId;
+  const before = state.oldestId ? "&beforeId=" + state.oldestId : "";
+  const data = await api("GET", `/api/v1/chats/${chatId}/messages?limit=${PAGE}${before}`);
+  if (chatId !== state.chatId) return; // пока грузили, пользователь открыл другой чат
+
+  const box = $("messages");
+  const firstPage = !state.oldestId;
+  const oldHeight = box.scrollHeight;
+  $("load-more")?.remove();
+
+  const nodes = data.messages.map(messageNode);
+  box.prepend(...nodes);
+  if (data.messages.length > 0) state.oldestId = data.messages[0].id;
+  if (data.messages.length === PAGE) {
+    const more = document.createElement("button");
+    more.id = "load-more";
+    more.className = "ghost";
+    more.textContent = "Загрузить раньше";
+    more.addEventListener("click", loadMessages);
+    box.prepend(more);
+  }
+  if (firstPage && data.messages.length === 0) {
+    const empty = document.createElement("div");
+    empty.id = "empty";
+    empty.textContent = "Сообщений пока нет";
+    box.append(empty);
+  }
+  // Первая страница — прокрутка вниз; подгрузка старых — сохраняем позицию
+  box.scrollTop = firstPage ? box.scrollHeight : box.scrollHeight - oldHeight;
+}
+
+function messageNode(msg) {
+  const div = document.createElement("div");
+  div.className = "msg" + (msg.senderId === state.me.id ? " mine" : "");
+  div.dataset.id = msg.id;
+  div.textContent = msg.text; // textContent, а не innerHTML: защита от XSS
+  const time = document.createElement("time");
+  time.textContent = new Date(msg.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  div.append(time);
+  return div;
+}
+
+// Сообщение может прийти дважды: в ответе на отправку и по WebSocket. Рисуем один раз
+function appendMessage(msg) {
+  const box = $("messages");
+  if (box.querySelector(`[data-id="${msg.id}"]`)) return;
+  $("empty")?.remove();
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  box.append(messageNode(msg));
+  if (nearBottom || msg.senderId === state.me.id) box.scrollTop = box.scrollHeight;
+}
+
+$("composer").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = $("text");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  try {
+    const data = await api("POST", `/api/v1/chats/${state.chatId}/messages`, { text });
+    appendMessage(data.message);
+    onMessageForList(data.message);
+  } catch (err) {
+    input.value = text;
+    alert(err.message);
+  }
+});
+
+function onMessageForList(msg) {
+  const chat = state.chats.find((c) => c.id === msg.chatId);
+  if (!chat) {
+    loadChats(); // кто-то начал с нами новый чат
+    return;
+  }
+  chat.lastMessage = msg;
+  state.chats.sort((a, b) => Number(b.lastMessage?.id || 0) - Number(a.lastMessage?.id || 0));
+  renderChats();
+}
+
+// ---------- Реальное время ----------
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(state.token)}`);
+  state.ws = ws;
+  ws.onopen = () => {
+    state.wsRetry = 0;
+    $("status").classList.add("online");
+  };
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.chatId === state.chatId) appendMessage(msg);
+    onMessageForList(msg);
+  };
+  ws.onclose = () => {
+    $("status").classList.remove("online");
+    // Переподключение с растущей паузой: 1, 2, 4 ... максимум 30 секунд
+    const delay = Math.min(30000, 1000 * 2 ** state.wsRetry++);
+    setTimeout(() => {
+      if (state.token) {
+        connect();
+        if (state.chatId) {
+          state.oldestId = null;
+          $("messages").replaceChildren();
+          loadMessages(); // догружаем то, что пропустили, пока были офлайн
+        }
+        loadChats();
+      }
+    }, delay);
+  };
+}
+
+// ---------- Старт ----------
+
+async function start() {
+  try {
+    state.me = parseToken(state.token);
+  } catch {
+    logout();
+    return;
+  }
+  if (state.me.exp * 1000 < Date.now()) {
+    logout();
+    return;
+  }
+  $("auth").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  $("me-email").textContent = state.me.email;
+  connect();
+  await loadChats();
+}
+
+if (state.token) start();
+</script>
+</body>
+</html>

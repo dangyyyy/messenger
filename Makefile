@@ -1,9 +1,9 @@
 VERSION ?= 0.1.0
-SERVICES := sso notifier
+SERVICES := sso notifier chat gateway
 COMPOSE := docker compose -f deployments/docker-compose.yml --project-directory .
 KIND_CLUSTER := messenger
 
-.PHONY: certs up down logs run-sso run-notifier test lint proto images kind-up kind-load k8s-apply k8s-nginx-reload kind-down
+.PHONY: certs up down logs run-sso run-notifier run-chat run-gateway test lint proto images kind-up kind-load k8s-apply k8s-nginx-reload kind-down
 
 # Самоподписанный TLS-сертификат для nginx (только для локалки)
 certs:
@@ -20,7 +20,7 @@ down:
 	$(COMPOSE) down
 
 logs:
-	$(COMPOSE) logs -f sso notifier nginx
+	$(COMPOSE) logs -f sso notifier chat gateway nginx
 
 # Запуск сервиса локально через go run (инфраструктура из compose)
 run-sso:
@@ -28,6 +28,12 @@ run-sso:
 
 run-notifier:
 	set -a && . ./configs/notifier.env && set +a && go run ./cmd/notifier
+
+run-chat:
+	set -a && . ./configs/chat.env && set +a && go run ./cmd/chat
+
+run-gateway:
+	set -a && . ./configs/gateway.env && set +a && go run ./cmd/gateway
 
 test:
 	go test ./... -race -count=1
@@ -53,6 +59,8 @@ k8s-apply:
 	kubectl apply -f deployments/k8s/namespace.yaml
 	kubectl -n messenger create configmap nginx-templates \
 		--from-file=deployments/nginx/templates/ --dry-run=client -o yaml | kubectl apply -f -
+	kubectl -n messenger create configmap nginx-web \
+		--from-file=web/ --dry-run=client -o yaml | kubectl apply -f -
 	kubectl -n messenger create secret tls nginx-tls \
 		--cert=deployments/nginx/certs/tls.crt --key=deployments/nginx/certs/tls.key \
 		--dry-run=client -o yaml | kubectl apply -f -
