@@ -120,6 +120,20 @@ func (s *Storage) AppByID(ctx context.Context, id int32) (domain.App, error) {
 	}
 	return app, nil
 }
+
+// SaveApp создает приложение или обновляет его секрет (регистрация приложения из конфига)
+func (s *Storage) SaveApp(ctx context.Context, app domain.App) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO apps (id, name, secret) VALUES ($1, $2, $3)
+		 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, secret = EXCLUDED.secret`,
+		app.ID, app.Name, app.Secret,
+	)
+	if err != nil {
+		return fmt.Errorf("save app: %w", err)
+	}
+	return nil
+}
+
 func (s *Storage) ProcessOutbox(ctx context.Context, limit int, publish func(context.Context, []domain.OutboxMessage) error) (int, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

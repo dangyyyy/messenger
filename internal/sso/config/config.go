@@ -22,6 +22,9 @@ type Config struct {
 	LoginWindow      time.Duration
 	KafkaBrokers     []string
 	OutboxInterval   time.Duration
+	AppID            int32
+	AppName          string
+	AppSecret        string
 }
 
 func Load() (Config, error) {
@@ -66,6 +69,10 @@ func Load() (Config, error) {
 	if err != nil {
 		errs = append(errs, fmt.Errorf("OUTBOX_INTERVAL: %w", err))
 	}
+	appID, err := strconv.ParseInt(getEnv("APP_ID", "1"), 10, 32)
+	if err != nil || appID <= 0 {
+		errs = append(errs, errors.New("APP_ID must be a positive integer"))
+	}
 	if err := errors.Join(errs...); err != nil {
 		return Config{}, err
 	}
@@ -82,6 +89,9 @@ func Load() (Config, error) {
 		LoginWindow:      loginWindow,
 		KafkaBrokers:     strings.Split(kafkaBrokers, ","),
 		OutboxInterval:   outboxInterval,
+		AppID:            int32(appID),
+		AppName:          getEnv("APP_NAME", "messenger"),
+		AppSecret:        os.Getenv("APP_SECRET"),
 	}, nil
 }
 

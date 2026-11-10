@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"messenger/internal/sso/cache"
 	"messenger/internal/sso/config"
+	"messenger/internal/sso/domain"
 	"messenger/internal/sso/grpcapi"
 	"messenger/internal/sso/kafka"
 	"messenger/internal/sso/outbox"
@@ -63,6 +64,15 @@ func run(cfg *config.Config) error {
 		return err
 	}
 	defer storage.Close()
+
+	// Приложение (и его секрет для подписи JWT) регистрируем из конфига,
+	// чтобы chat мог проверять токены тем же секретом
+	if cfg.AppSecret != "" {
+		app := domain.App{ID: cfg.AppID, Name: cfg.AppName, Secret: cfg.AppSecret}
+		if err := storage.SaveApp(startupCtx, app); err != nil {
+			return err
+		}
+	}
 
 	redisOptions, err := redis.ParseURL(cfg.RedisURL)
 	if err != nil {
