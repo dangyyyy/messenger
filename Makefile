@@ -3,7 +3,14 @@ SERVICES := sso notifier
 COMPOSE := docker compose -f deployments/docker-compose.yml --project-directory .
 KIND_CLUSTER := messenger
 
-.PHONY: up down logs run-sso run-notifier test lint proto images kind-up kind-load k8s-apply kind-down
+.PHONY: certs up down logs run-sso run-notifier test lint proto images kind-up kind-load k8s-apply k8s-nginx-reload kind-down
+
+# Самоподписанный TLS-сертификат для nginx (только для локалки)
+certs:
+	mkdir -p deployments/nginx/certs
+	openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+		-subj "/CN=localhost" -addext "subjectAltName=DNS:localhost" \
+		-keyout deployments/nginx/certs/tls.key -out deployments/nginx/certs/tls.crt
 
 # Весь стек в Docker Compose
 up:
@@ -13,7 +20,7 @@ down:
 	$(COMPOSE) down
 
 logs:
-	$(COMPOSE) logs -f sso notifier
+	$(COMPOSE) logs -f sso notifier nginx
 
 # Запуск сервиса локально через go run (инфраструктура из compose)
 run-sso:
@@ -44,7 +51,16 @@ kind-load: images
 
 k8s-apply:
 	kubectl apply -f deployments/k8s/namespace.yaml
+	kubectl -n messenger create configmap nginx-templates \
+		--from-file=deployments/nginx/templates/ --dry-run=client -o yaml | kubectl apply -f -
+	kubectl -n messenger create secret tls nginx-tls \
+		--cert=deployments/nginx/certs/tls.crt --key=deployments/nginx/certs/tls.key \
+		--dry-run=client -o yaml | kubectl apply -f -
 	kubectl apply -f deployments/k8s/
+
+# После правки шаблона: обновить ConfigMap и перезапустить nginx
+k8s-nginx-reload: k8s-apply
+	kubectl -n messenger rollout restart deployment/nginx
 
 kind-down:
 	kind delete cluster --name $(KIND_CLUSTER)

@@ -96,10 +96,10 @@ services:
       DATABASE_URL: postgres://sso:${SSO_DB_PASSWORD}@sso-postgres:5432/sso?sslmode=disable
       REDIS_URL: redis://redis:6379/0
       KAFKA_BROKERS: kafka:9092
-      GRPC_PORT: ${GRPC_PORT:-50051}
+      GRPC_PORT: "50051"
       GRPC_REFLECTION: "true"
-    ports:
-      - "${GRPC_PORT:-50051}:${GRPC_PORT:-50051}"
+    deploy:
+      replicas: 2
     depends_on:
       sso-postgres:
         condition: service_healthy
@@ -124,6 +124,20 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
     stop_grace_period: 15s
+
+  nginx:
+    image: nginx:1.30-alpine
+    environment:
+      NGINX_ENTRYPOINT_LOCAL_RESOLVERS: "1"
+      SSO_HOST: sso
+    ports:
+      - "${NGINX_PORT:-8443}:8443"
+    volumes:
+      - ./deployments/nginx/templates:/etc/nginx/templates:ro
+      - ./deployments/nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - sso
+    restart: unless-stopped
 
 volumes:
   sso_postgres_data:

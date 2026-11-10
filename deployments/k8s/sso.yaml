@@ -25,6 +25,21 @@ spec:
       port: 50051
       targetPort: grpc
 ---
+# Headless: DNS отдает IP всех готовых подов, nginx балансирует gRPC-запросы между ними
+apiVersion: v1
+kind: Service
+metadata:
+  name: sso-headless
+  namespace: messenger
+spec:
+  clusterIP: None
+  selector:
+    app: sso
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:

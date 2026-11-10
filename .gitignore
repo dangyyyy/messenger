@@ -2,3 +2,4 @@
 configs/*.env
 *.out
 .idea/
+deployments/nginx/certs/

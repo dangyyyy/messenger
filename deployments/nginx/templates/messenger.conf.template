@@ -1,0 +1,61 @@
+# Шаблон: при старте контейнера envsubst подставит ${SSO_HOST} и ${NGINX_LOCAL_RESOLVERS}
+# и положит готовый файл в /etc/nginx/conf.d/messenger.conf (внутрь блока http).
+
+log_format grpc_json escape=json
+    '{"time":"$time_iso8601","client":"$remote_addr","method":"$request_uri",'
+    '"http_status":$status,"grpc_status":"$sent_trailer_grpc_status",'
+    '"upstream":"$upstream_addr","duration":$request_time}';
+
+# DNS-сервер берем из /etc/resolv.conf контейнера (Docker или Kubernetes)
+resolver ${NGINX_LOCAL_RESOLVERS} valid=5s ipv6=off;
+
+# Не больше 5 запросов в секунду с одного IP, общая память на все воркеры
+limit_req_zone $binary_remote_addr zone=per_ip:10m rate=5r/s;
+
+upstream sso {
+    zone sso 64k;
+    # resolve: nginx сам перечитывает DNS и видит новые/умершие реплики
+    server ${SSO_HOST}:50051 resolve;
+    keepalive 16;
+}
+
+server {
+    listen 8443 ssl;
+    http2 on;
+    server_name _;
+
+    ssl_certificate     /etc/nginx/certs/tls.crt;
+    ssl_certificate_key /etc/nginx/certs/tls.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    access_log /var/log/nginx/access.log grpc_json;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location /sso.v1.AuthService/ {
+        limit_req zone=per_ip burst=10 nodelay;
+        limit_req_status 429;
+        grpc_pass grpc://sso;
+    }
+
+    location /grpc.reflection. {
+        grpc_pass grpc://sso;
+    }
+
+    location /grpc.health.v1.Health/ {
+        grpc_pass grpc://sso;
+    }
+
+    # gRPC-клиент не понимает HTTP 429, поэтому отдаем ответ в формате gRPC
+    error_page 429 = @grpc_rate_limited;
+    location @grpc_rate_limited {
+        default_type application/grpc;
+        add_header grpc-status 8 always;
+        add_header grpc-message "rate limit exceeded" always;
+        return 200 "";
+    }
+}
