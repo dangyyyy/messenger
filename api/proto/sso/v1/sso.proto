@@ -2,11 +2,23 @@ syntax = "proto3";
 
 package sso.v1;
 
+import "google/api/annotations.proto";
+
 option go_package = "messenger/pkg/api/sso/v1;ssov1";
 
 service AuthService {
-  rpc Register(RegisterRequest) returns (RegisterResponse);
-  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Register(RegisterRequest) returns (RegisterResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/auth/register"
+      body: "*"
+    };
+  }
+  rpc Login(LoginRequest) returns (LoginResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/auth/login"
+      body: "*"
+    };
+  }
   rpc IsAdmin(IsAdminRequest) returns (IsAdminResponse);
 }
 
@@ -25,7 +37,7 @@ message LoginRequest {
   int32 app_id = 3;
 }
 
-message LoginResponse{
+message LoginResponse {
   string token = 1;
 }
 

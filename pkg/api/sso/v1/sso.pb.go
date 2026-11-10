@@ -7,6 +7,7 @@
 package ssov1
 
 import (
+	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -313,7 +314,7 @@ var File_sso_v1_sso_proto protoreflect.FileDescriptor
 
 const file_sso_v1_sso_proto_rawDesc = "" +
 	"\n" +
-	"\x10sso/v1/sso.proto\x12\x06sso.v1\"C\n" +
+	"\x10sso/v1/sso.proto\x12\x06sso.v1\x1a\x1cgoogle/api/annotations.proto\"C\n" +
 	"\x0fRegisterRequest\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x12\x1a\n" +
 	"\bpassword\x18\x02 \x01(\tR\bpassword\"+\n" +
@@ -328,10 +329,10 @@ const file_sso_v1_sso_proto_rawDesc = "" +
 	"\x0eIsAdminRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\x03R\x06userId\",\n" +
 	"\x0fIsAdminResponse\x12\x19\n" +
-	"\bis_admin\x18\x01 \x01(\bR\aisAdmin2\xbe\x01\n" +
-	"\vAuthService\x12=\n" +
-	"\bRegister\x12\x17.sso.v1.RegisterRequest\x1a\x18.sso.v1.RegisterResponse\x124\n" +
-	"\x05Login\x12\x14.sso.v1.LoginRequest\x1a\x15.sso.v1.LoginResponse\x12:\n" +
+	"\bis_admin\x18\x01 \x01(\bR\aisAdmin2\xff\x01\n" +
+	"\vAuthService\x12_\n" +
+	"\bRegister\x12\x17.sso.v1.RegisterRequest\x1a\x18.sso.v1.RegisterResponse\" \x82\xd3\xe4\x93\x02\x1a:\x01*\"\x15/api/v1/auth/register\x12S\n" +
+	"\x05Login\x12\x14.sso.v1.LoginRequest\x1a\x15.sso.v1.LoginResponse\"\x1d\x82\xd3\xe4\x93\x02\x17:\x01*\"\x12/api/v1/auth/login\x12:\n" +
 	"\aIsAdmin\x12\x16.sso.v1.IsAdminRequest\x1a\x17.sso.v1.IsAdminResponseB Z\x1emessenger/pkg/api/sso/v1;ssov1b\x06proto3"
 
 var (
